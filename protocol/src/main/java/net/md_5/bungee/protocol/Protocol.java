@@ -104,7 +104,7 @@ public enum Protocol
     public static List<Integer> supportedVersions = Arrays.asList(
             ProtocolConstants.MINECRAFT_1_7_2,
             ProtocolConstants.MINECRAFT_1_7_6,
-            ProtocolConstants.MINECRAFT_SNAPSHOT
+            ProtocolConstants.MINECRAFT_1_8
     );
     /*========================================================================*/
     public final DirectionData TO_SERVER = new DirectionData( ProtocolConstants.Direction.TO_SERVER );
@@ -122,7 +122,7 @@ public enum Protocol
 
         public boolean hasPacket(int id)
         {
-            return id < MAX_PACKET_ID && packetConstructors[id] != null;
+            return id >= 0 && id < MAX_PACKET_ID && packetConstructors[id] != null;
         }
 
         public final DefinedPacket createPacket(int id)
@@ -138,7 +138,7 @@ public enum Protocol
 
             try
             {
-                return packetClasses[id].newInstance();
+                return packetConstructors[id].newInstance();
             } catch ( ReflectiveOperationException ex )
             {
                 throw new BadPacketException( "Could not construct packet with id " + id, ex );

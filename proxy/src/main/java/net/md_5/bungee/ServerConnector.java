@@ -110,7 +110,22 @@ public class ServerConnector extends PacketHandler
         Preconditions.checkState( thisState == State.LOGIN_SUCCESS, "Not expecting LOGIN_SUCCESS" );
         ch.setProtocol( Protocol.GAME );
         thisState = State.LOGIN;
-        if ( user.getServer() != null && user.getForgeClientHandler().isHandshakeComplete() )
+
+        // Only reset the Forge client when:
+        // 1) The user is switching servers (so has a current server)
+        // 2) The handshake is complete
+        // 3) The user is currently on a modded server (if we are on a vanilla server,
+        //    we may be heading for another vanilla server, so we don't need to reset.)
+        //
+        // user.getServer() gets the user's CURRENT server, not the one we are trying
+        // to connect to.
+        //
+        // We will reset the connection later if the current server is vanilla, and
+        // we need to switch to a modded connection. However, we always need to reset the
+        // connection when we have a modded server regardless of where we go - doing it
+        // here makes sense.
+        if ( user.getServer() != null && user.getForgeClientHandler().isHandshakeComplete()
+                && user.getServer().isForgeServer() )
         {
             user.getForgeClientHandler().resetHandshake();
         }
@@ -166,8 +181,17 @@ public class ServerConnector extends PacketHandler
             user.setServerEntityId( login.getEntityId() );
 
             // Set tab list size, this sucks balls, TODO: what shall we do about packet mutability
-            Login modLogin = new Login( login.getEntityId(), login.getGameMode(), (byte) login.getDimension(), login.getDifficulty(),
+            // Forge allows dimension ID's > 127
+            Login modLogin;
+            if ( handshakeHandler != null && handshakeHandler.isServerForge() )
+            {
+                modLogin = new Login( login.getEntityId(), login.getGameMode(), login.getDimension(), login.getDifficulty(),
                     (byte) user.getPendingConnection().getListener().getTabListSize(), login.getLevelType(), login.isReducedDebugInfo() );
+            } else
+            {
+                modLogin = new Login( login.getEntityId(), login.getGameMode(), (byte) login.getDimension(), login.getDifficulty(),
+                        (byte) user.getPendingConnection().getListener().getTabListSize(), login.getLevelType(), login.isReducedDebugInfo() );
+            }
 
             user.unsafe().sendPacket( modLogin );
 
@@ -277,6 +301,14 @@ public class ServerConnector extends PacketHandler
             {
                 if ( channel.equals( ForgeConstants.FML_HANDSHAKE_TAG ) )
                 {
+                    // If we have a completed handshake and we have been asked to register a FML|HS
+                    // packet, let's send the reset packet now. Then, we can continue the message sending.
+                    // The handshake will not be complete if we reset this earlier.
+                    if ( user.getServer() != null && user.getForgeClientHandler().isHandshakeComplete() )
+                    {
+                        user.getForgeClientHandler().resetHandshake();
+                    }
+
                     isForgeServer = true;
                     break;
                 }
@@ -290,9 +322,10 @@ public class ServerConnector extends PacketHandler
             }
         }
 
-        if ( pluginMessage.getTag().equals( ForgeConstants.FML_HANDSHAKE_TAG ) || pluginMessage.getTag().equals( ForgeConstants.FORGE_REGISTER ) )
+        // We must bypass our handler once handshake is complete in order to send DimensionRegisterPacket's during Login.
+        if ( !handshakeHandler.isHandshakeComplete() && ( pluginMessage.getTag().equals( ForgeConstants.FML_HANDSHAKE_TAG ) || pluginMessage.getTag().equals( ForgeConstants.FORGE_REGISTER ) ) )
         {
-            this.handshakeHandler.handle( pluginMessage );
+            handshakeHandler.handle( pluginMessage );
             if ( user.getForgeClientHandler().checkUserOutdated() )
             {
                 ch.close();
