@@ -501,7 +501,7 @@ public final class UserConnection implements ProxiedPlayer
     @Override
     public void setTabHeader(BaseComponent header, BaseComponent footer)
     {
-        if ( pendingConnection.getVersion() >= ProtocolConstants.MINECRAFT_SNAPSHOT )
+        if ( pendingConnection.getVersion() >= ProtocolConstants.MINECRAFT_1_8 )
         {
             unsafe().sendPacket( new PlayerListHeaderFooter(
                     ( header != null ) ? ComponentSerializer.toString( header ) : EMPTY_TEXT,
@@ -513,7 +513,7 @@ public final class UserConnection implements ProxiedPlayer
     @Override
     public void setTabHeader(BaseComponent[] header, BaseComponent[] footer)
     {
-        if ( pendingConnection.getVersion() >= ProtocolConstants.MINECRAFT_SNAPSHOT )
+        if ( pendingConnection.getVersion() >= ProtocolConstants.MINECRAFT_1_8 )
         {
             unsafe().sendPacket( new PlayerListHeaderFooter(
                     ( header != null ) ? ComponentSerializer.toString( header ) : EMPTY_TEXT,
