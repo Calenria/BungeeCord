@@ -37,6 +37,7 @@ import net.md_5.bungee.chat.ComponentSerializer;
 import net.md_5.bungee.connection.InitialHandler;
 import net.md_5.bungee.entitymap.EntityMap;
 import net.md_5.bungee.forge.ForgeClientHandler;
+import net.md_5.bungee.forge.ForgeConstants;
 import net.md_5.bungee.forge.ForgeServerHandler;
 import net.md_5.bungee.netty.ChannelWrapper;
 import net.md_5.bungee.netty.HandlerBoss;
@@ -165,6 +166,9 @@ public final class UserConnection implements ProxiedPlayer
         }
 
         forgeClientHandler = new ForgeClientHandler( this );
+
+        // Set whether the connection has a 1.8 FML marker in the handshake.
+        forgeClientHandler.setFmlTokenInHandshake( this.getPendingConnection().getExtraDataInHandshake().contains( ForgeConstants.FML_HANDSHAKE_TOKEN ) );
     }
 
     public void sendPacket(PacketWrapper packet)
@@ -484,6 +488,12 @@ public final class UserConnection implements ProxiedPlayer
     }
 
     @Override
+    public boolean isForgeUser() 
+    {
+        return forgeClientHandler.isForgeUser();
+    }
+
+    @Override
     public Map<String, String> getModList()
     {
         if ( forgeClientHandler.getClientModList() == null )
@@ -533,6 +543,11 @@ public final class UserConnection implements ProxiedPlayer
     public void sendTitle(Title title)
     {
         title.send( this );
+    }
+
+    public String getExtraDataInHandshake()
+    {
+        return this.getPendingConnection().getExtraDataInHandshake();
     }
 
     public void setCompressionThreshold(int compressionThreshold)
