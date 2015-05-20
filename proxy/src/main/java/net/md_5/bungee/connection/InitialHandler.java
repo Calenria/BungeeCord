@@ -48,6 +48,7 @@ import net.md_5.bungee.protocol.packet.Kick;
 import net.md_5.bungee.api.AbstractReconnectHandler;
 import net.md_5.bungee.api.event.PlayerHandshakeEvent;
 import net.md_5.bungee.api.event.PreLoginEvent;
+import net.md_5.bungee.jni.cipher.BungeeCipher;
 import net.md_5.bungee.protocol.Protocol;
 import net.md_5.bungee.protocol.ProtocolConstants;
 import net.md_5.bungee.protocol.packet.LegacyHandshake;
@@ -92,6 +93,10 @@ public class InitialHandler extends PacketHandler implements PendingConnection
     private UUID offlineId;
     @Getter
     private LoginResult loginProfile;
+    @Getter
+    private boolean legacy;
+    @Getter
+    private String extraDataInHandshake = "";
 
     private enum State
     {
@@ -125,48 +130,13 @@ public class InitialHandler extends PacketHandler implements PendingConnection
     @Override
     public void handle(LegacyHandshake legacyHandshake) throws Exception
     {
+        this.legacy = true;
         ch.getHandle().writeAndFlush( bungee.getTranslation( "outdated_client" ) );
         ch.close();
     }
 
-    @Override
-    public void handle(LegacyPing ping) throws Exception
+    private void handlePing(final Callback<ProxyPingEvent> callback)
     {
-        ServerPing legacy = new ServerPing( new ServerPing.Protocol( bungee.getName() + " " + bungee.getGameVersion(), bungee.getProtocolVersion() ),
-                new ServerPing.Players( listener.getMaxPlayers(), bungee.getOnlineCount(), null ), listener.getMotd(), (Favicon) null );
-
-        Callback<ProxyPingEvent> callback = new Callback<ProxyPingEvent>()
-        {
-            @Override
-            public void done(ProxyPingEvent result, Throwable error)
-            {
-                if ( ch.isClosed() )
-                {
-                    return;
-                }
-
-                ServerPing ping = result.getResponse();
-
-                String kickMessage = ChatColor.DARK_BLUE
-                        + "\00" + 127
-                        + "\00" + ping.getVersion().getName()
-                        + "\00" + ping.getDescription()
-                        + "\00" + ping.getPlayers().getOnline()
-                        + "\00" + ping.getPlayers().getMax();
-
-                ch.getHandle().writeAndFlush( kickMessage );
-                ch.close();
-            }
-        };
-
-        bungee.getPluginManager().callEvent( new ProxyPingEvent( this, legacy, callback ) );
-    }
-
-    @Override
-    public void handle(StatusRequest statusRequest) throws Exception
-    {
-        Preconditions.checkState( thisState == State.STATUS, "Not expecting STATUS" );
-
         ServerInfo forced = AbstractReconnectHandler.getForcedHost( this );
         final String motd = ( forced != null ) ? forced.getMotd() : listener.getMotd();
 
@@ -179,19 +149,16 @@ public class InitialHandler extends PacketHandler implements PendingConnection
                 {
                     result = new ServerPing();
                     result.setDescription( bungee.getTranslation( "ping_cannot_connect" ) );
+
+                    if ( legacy )
+                    {
+                        // The legacy ping code requires we provide these.
+                        result.setVersion( new ServerPing.Protocol( bungee.getName() + " " + bungee.getGameVersion(), bungee.getProtocolVersion() ));
+                        result.setPlayers( new ServerPing.Players( 0, 0, null ) );
+                    }
+
                     bungee.getLogger().log( Level.WARNING, "Error pinging remote server", error );
                 }
-
-                Callback<ProxyPingEvent> callback = new Callback<ProxyPingEvent>()
-                {
-                    @Override
-                    public void done(ProxyPingEvent pingResult, Throwable error)
-                    {
-                        BungeeCord.getInstance().getConnectionThrottle().unthrottle( getAddress().getAddress() );
-                        Gson gson = handshake.getProtocolVersion() == ProtocolConstants.MINECRAFT_1_7_2 ? BungeeCord.getInstance().gsonLegacy : BungeeCord.getInstance().gson;
-                        unsafe.sendPacket( new StatusResponse( gson.toJson( pingResult.getResponse() ) ) );
-                    }
-                };
 
                 bungee.getPluginManager().callEvent( new ProxyPingEvent( InitialHandler.this, result, callback ) );
             }
@@ -199,18 +166,86 @@ public class InitialHandler extends PacketHandler implements PendingConnection
 
         if ( forced != null && listener.isPingPassthrough() )
         {
-            ( (BungeeServerInfo) forced ).ping( pingBack, handshake.getProtocolVersion() );
+            ( (BungeeServerInfo) forced ).ping( pingBack, legacy ? bungee.getProtocolVersion() : handshake.getProtocolVersion() );
         } else
         {
-            int protocol = ( Protocol.supportedVersions.contains( handshake.getProtocolVersion() ) ) ? handshake.getProtocolVersion() : bungee.getProtocolVersion();
+            int protocol = legacy ? bungee.getProtocolVersion() : ( Protocol.supportedVersions.contains( handshake.getProtocolVersion() ) ) ? handshake.getProtocolVersion() : bungee.getProtocolVersion();
             pingBack.done( new ServerPing(
-                    new ServerPing.Protocol( bungee.getName() + " " + bungee.getGameVersion(), protocol ),
-                    new ServerPing.Players( listener.getMaxPlayers(), bungee.getOnlineCount(), null ),
-                    motd, BungeeCord.getInstance().config.getFaviconObject() ),
+                            new ServerPing.Protocol( bungee.getName() + " " + bungee.getGameVersion(), protocol ),
+                            new ServerPing.Players( listener.getMaxPlayers(), bungee.getOnlineCount(), null ),
+                            motd, BungeeCord.getInstance().config.getFaviconObject() ),
                     null );
         }
 
         thisState = State.PING;
+    }
+
+    @Override
+    public void handle(LegacyPing ping) throws Exception
+    {
+        this.legacy = true;
+        final boolean v1_5 = ping.isV1_5();
+
+        // Due to the way AbstractReconnectHandler.getForcedHost() works, we will need to provide
+        // a fake virtual host. This is okay since <= 1.6 does not support forced hosts.
+        this.virtualHost = InetSocketAddress.createUnresolved( "oldping.md-5.net", 25565 );
+
+        handlePing( new Callback<ProxyPingEvent>()
+        {
+            @Override
+            public void done(ProxyPingEvent result, Throwable error)
+            {
+                if ( ch.isClosed() )
+                {
+                    return;
+                }
+
+                ServerPing legacy = result.getResponse();
+                String kickMessage;
+
+                if ( v1_5 )
+                {
+                    kickMessage = ChatColor.DARK_BLUE
+                            + "\00" + 127
+                            + '\00' + legacy.getVersion().getName()
+                            + '\00' + getFirstLine(legacy.getDescription())
+                            + '\00' + legacy.getPlayers().getOnline()
+                            + '\00' + legacy.getPlayers().getMax();
+                } else
+                {
+                    // Clients <= 1.3 don't support colored motds because the color char is used as delimiter
+                    kickMessage = ChatColor.stripColor(getFirstLine(legacy.getDescription()))
+                            + '\u00a7' + legacy.getPlayers().getOnline()
+                            + '\u00a7' + legacy.getPlayers().getMax();
+                }
+
+                ch.getHandle().writeAndFlush(kickMessage);
+                ch.close();
+            }
+        } );
+    }
+
+    private static String getFirstLine(String str)
+    {
+        int pos = str.indexOf( '\n' );
+        return pos == -1 ? str : str.substring( 0, pos );
+    }
+
+    @Override
+    public void handle(StatusRequest statusRequest) throws Exception
+    {
+        Preconditions.checkState( thisState == State.STATUS, "Not expecting STATUS" );
+
+        handlePing( new Callback<ProxyPingEvent>()
+        {
+            @Override
+            public void done(ProxyPingEvent pingResult, Throwable error)
+            {
+                BungeeCord.getInstance().getConnectionThrottle().unthrottle( getAddress().getAddress() );
+                Gson gson = handshake.getProtocolVersion() == ProtocolConstants.MINECRAFT_1_7_2 ? BungeeCord.getInstance().gsonLegacy : BungeeCord.getInstance().gson;
+                unsafe.sendPacket( new StatusResponse( gson.toJson( pingResult.getResponse() ) ) );
+            }
+        } );
     }
 
     @Override
@@ -227,6 +262,18 @@ public class InitialHandler extends PacketHandler implements PendingConnection
         Preconditions.checkState( thisState == State.HANDSHAKE, "Not expecting HANDSHAKE" );
         this.handshake = handshake;
         ch.setVersion( handshake.getProtocolVersion() );
+
+        // Starting with FML 1.8, a "\0FML\0" token is appended to the handshake. This interferes 
+        // with Bungee's IP forwarding, so we detect it, and remove it from the host string, for now.
+        // We know FML appends \00FML\00. However, we need to also consider that other systems might
+        // add their own data to the end of the string. So, we just take everything from the \0 character
+        // and save it for later.
+        if ( handshake.getHost().contains( "\0" ) )
+        {
+            String[] split = handshake.getHost().split( "\0", 2 );
+            handshake.setHost( split[0] );
+            extraDataInHandshake = "\0" + split[1];
+        }
 
         // SRV records can end with a . depending on DNS / client.
         if ( handshake.getHost().endsWith( "." ) )
@@ -268,6 +315,12 @@ public class InitialHandler extends PacketHandler implements PendingConnection
             return;
         }
 
+        if ( getName().contains( "." ) )
+        {
+            disconnect( bungee.getTranslation( "name_invalid" ) );
+            return;
+        }
+
         if ( getName().length() > 16 )
         {
             disconnect( bungee.getTranslation( "name_too_long" ) );
@@ -282,7 +335,8 @@ public class InitialHandler extends PacketHandler implements PendingConnection
         }
 
         // If offline mode and they are already on, don't allow connect
-        if ( !isOnlineMode() && bungee.getPlayer( getName() ) != null )
+        // We can just check by UUID here as names are based on UUID
+        if ( !isOnlineMode() && bungee.getPlayer( getUniqueId() ) != null )
         {
             disconnect( bungee.getTranslation( "already_connected" ) );
             return;
@@ -372,12 +426,33 @@ public class InitialHandler extends PacketHandler implements PendingConnection
 
     private void finish()
     {
-        // Check for multiple connections
-        ProxiedPlayer old = bungee.getPlayer( getName() );
-        if ( old != null )
+        if ( isOnlineMode() )
         {
-            // TODO See #1218
-            old.disconnect( bungee.getTranslation( "already_connected" ) );
+            // Check for multiple connections
+            // We have to check for the old name first
+            ProxiedPlayer oldName = bungee.getPlayer( getName() );
+            if ( oldName != null )
+            {
+                // TODO See #1218
+                oldName.disconnect( bungee.getTranslation( "already_connected" ) );
+            }
+            // And then also for their old UUID
+            ProxiedPlayer oldID = bungee.getPlayer( getUniqueId() );
+            if ( oldID != null )
+            {
+                // TODO See #1218
+                oldID.disconnect( bungee.getTranslation( "already_connected" ) );
+            }
+        } else {
+            // In offline mode the existing user stays and we kick the new one
+            ProxiedPlayer oldName = bungee.getPlayer( getName() );
+            if ( oldName != null )
+            {
+                // TODO See #1218
+                disconnect( bungee.getTranslation( "already_connected" ) );
+                return;
+            }
+
         }
 
         offlineId = java.util.UUID.nameUUIDFromBytes( ( "OfflinePlayer:" + getName() ).getBytes( Charsets.UTF_8 ) );
@@ -517,6 +592,14 @@ public class InitialHandler extends PacketHandler implements PendingConnection
     {
         Preconditions.checkState( thisState == State.USERNAME, "Can only set online mode status whilst state is username" );
         this.onlineMode = onlineMode;
+    }
+
+    @Override
+    public void setUniqueId(UUID uuid)
+    {
+        Preconditions.checkState( thisState == State.USERNAME, "Can only set uuid while state is username" );
+        Preconditions.checkState( !onlineMode, "Can only set uuid when online mode is false" );
+        this.uniqueId = uuid;
     }
 
     @Override
