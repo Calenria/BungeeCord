@@ -97,9 +97,12 @@ public class HandlerBoss extends ChannelInboundHandlerAdapter
             if ( cause instanceof ReadTimeoutException )
             {
                 ProxyServer.getInstance().getLogger().log( Level.WARNING, "{0} - read timed out", handler );
-            } else if ( cause instanceof BadPacketException )
+            } else if ( cause instanceof DecoderException && cause.getCause() instanceof BadPacketException )
             {
-                ProxyServer.getInstance().getLogger().log( Level.WARNING, "{0} - bad packet ID, are mods in use!?", handler );
+                ProxyServer.getInstance().getLogger().log( Level.WARNING, "{0} - bad packet ID, are mods in use!? {1}", new Object[]
+                {
+                    handler, cause.getCause().getMessage()
+                } );
             } else if ( cause instanceof IOException )
             {
                 ProxyServer.getInstance().getLogger().log( Level.WARNING, "{0} - IOException: {1}", new Object[]

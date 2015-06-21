@@ -448,6 +448,8 @@ public class DownstreamBridge extends PacketHandler
                 {
                     con.getServer().sendData( "BungeeCord", b );
                 }
+            
+            throw CancelSendSignal.INSTANCE;
             }
         }
     }
