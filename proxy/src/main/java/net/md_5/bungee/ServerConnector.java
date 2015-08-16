@@ -229,7 +229,10 @@ public class ServerConnector extends PacketHandler
             }
             serverScoreboard.clear();
 
-            user.sendDimensionSwitch();
+            if( user.getDimension() == login.getDimension() ){
+                // Only change dimension to reset entities
+                user.unsafe().sendPacket( new Respawn( ( login.getDimension() == 0 ) ? 1 : 0, login.getDifficulty(), login.getGameMode(), login.getLevelType() ) );
+            }
 
             user.setServerEntityId( login.getEntityId() );
             user.unsafe().sendPacket( new Respawn( login.getDimension(), login.getDifficulty(), login.getGameMode(), login.getLevelType() ) );
@@ -252,7 +255,7 @@ public class ServerConnector extends PacketHandler
         // TODO: Move this to the connected() method of DownstreamBridge
         target.addPlayer( user );
         user.getPendingConnects().remove( target );
-        user.setDimensionChange( false );
+        user.setDimension( login.getDimension() );
 
         user.setServer( server );
         ch.getHandle().pipeline().get( HandlerBoss.class ).setHandler( new DownstreamBridge( bungee, user, server ) );
@@ -285,14 +288,7 @@ public class ServerConnector extends PacketHandler
             throw CancelSendSignal.INSTANCE;
         }
 
-        String message = bungee.getTranslation( "connect_kick", target.getName(), event.getKickReason() );
-        if ( user.isDimensionChange() )
-        {
-            user.disconnect( message );
-        } else
-        {
-            user.sendMessage( message );
-        }
+        user.sendMessage( bungee.getTranslation( "connect_kick", target.getName(), event.getKickReason() ) );
 
         throw CancelSendSignal.INSTANCE;
     }
